@@ -1,10 +1,18 @@
 package main
+
 import (
-    "fmt"
-    "log"
-    "net/http"
-    "github.com/patrickmn/go-cache"
-    "regexp"
+	"database/sql"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/patrickmn/go-cache"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Max request per minute
@@ -12,11 +20,11 @@ const fail_limit_value int = 1
 const rate_limit_value int = 1000
 const limit_expiration time.Duration = time.Minute
 
-func main() {
+var api_key_cache      = cache.New(5*time.Minute, 10*time.Minute)
+var request_fail_cache = cache.New(5*time.Minute, 10*time.Minute)
+var rate_limit_cache   = cache.New(5*time.Minute, 10*time.Minute)
 
-    api_key_cache      := cache.New(5*time.Minute, 10*time.Minute)
-    request_fail_cache := cache.New(5*time.Minute, 10*time.Minute)
-    rate_limit_cache   := cache.New(5*time.Minute, 10*time.Minute)
+func main() {
 
 	router := http.NewServeMux()
 	router.HandleFunc("POST /", incomingRequestHandler)
@@ -28,7 +36,7 @@ func main() {
     fmt.Println("Server running on :8080")
 }
 
-function incomingRequestHandler(w http.ResponseWriter, r *http.Request){
+func incomingRequestHandler(w http.ResponseWriter, r *http.Request){
 
     origin_ip, err := get_origin_ip()
     if err != nil {
@@ -52,7 +60,7 @@ function incomingRequestHandler(w http.ResponseWriter, r *http.Request){
         return
     }
 
-    err := r.ParseForm()
+    err = r.ParseForm()
     if err != nil {
         register_request_fail(origin_ip)
         fmt.Println("Error parsing form:", err)
@@ -62,7 +70,7 @@ function incomingRequestHandler(w http.ResponseWriter, r *http.Request){
     }
 
     api_key := r.Form.Get("ApiKey")
-    if api_key == ''{
+    if api_key == "" {
         register_request_fail(origin_ip)
         err = errors.New("ApiKey not specified")
         fmt.Println(err.Error())
@@ -71,7 +79,7 @@ function incomingRequestHandler(w http.ResponseWriter, r *http.Request){
         return
     }
 
-    id_platform, err = get_platform(api_key)
+    id_platform, err := get_platform(api_key)
     if err == ApiKeyNotFound {
         register_request_fail(origin_ip)
         err = errors.New("ApiKey not found")
@@ -95,7 +103,7 @@ func get_platform(api_key string) (string, error){
 
     // Search first in cache
     if platform, found := api_key_cache.Get(api_key); found {
-		return platform.(string)
+		return platform.(string), nil
 	}
 
     // If not in cache, retrieve from database
@@ -104,14 +112,14 @@ func get_platform(api_key string) (string, error){
     if err := row.Scan(id_platform); err != nil {
         if err == sql.ErrNoRows {
             fmt.Println("Get plaform by Api Key [%d]: no platform found", api_key)
-            return nil, ApiKeyNotFound
+            return "", ApiKeyNotFound
         }
-        return nil, fmt.Errorf("Get platform by Api Key [%d] from DB : %v", api_key, err)
+        return "", fmt.Errorf("Get platform by Api Key [%d] from DB : %v", api_key, err)
     }
     
     api_key_cache.Set(api_key, id_platform, cache.NoExpiration)
 
-    return id_platform
+    return id_platform, nil
 
 }
 
@@ -132,7 +140,7 @@ func apply_rate_limit(origin_ip string) bool {
 	}
 
     // Increase the counter only if rate limit is not applied
-    value, err := rate_limit_cache.IncrementInt(origin_ip, 1)
+    _, err := rate_limit_cache.IncrementInt(origin_ip, 1)
     if err != nil {
         rate_limit_cache.Set(origin_ip, 1, cache.NoExpiration)
     }
@@ -150,7 +158,7 @@ func apply_rate_limit(origin_ip string) bool {
 
 func register_request_fail(origin_ip string){
 
-    value, err := request_fail_cache.IncrementInt(origin_ip, 1)
+    _, err := request_fail_cache.IncrementInt(origin_ip, 1)
     if err != nil {
         request_fail_cache.Set(origin_ip, 1, cache.NoExpiration)
     }
@@ -168,8 +176,8 @@ func register_request_fail(origin_ip string){
 func get_origin_ip() (string, error) {
 
     forwarderForHeader := r.Header.Get("X-Forwarded-For")
-    if forwarderForHeader == '' {
-        return error.New("X-Forwarded-For value is empty")
+    if forwarderForHeader == "" {
+        return "", errors.New("X-Forwarded-For value is empty")
     }
 
     // Find the index of the first comma
@@ -184,7 +192,7 @@ func get_origin_ip() (string, error) {
 	}
 
     if !is_valid_ip_address(origin_ip) {
-        return errors.New("Detected IP is not valid: %s", origin_ip)
+        return "", fmt.Errorf("Detected IP is not valid: %s", origin_ip)
     }
     
     return origin_ip, nil
