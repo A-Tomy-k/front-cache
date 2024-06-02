@@ -4,7 +4,7 @@ import (
     "log"
     "net/http"
     "github.com/patrickmn/go-cache"
-
+    "regexp"
 )
 
 // Max request per minute
@@ -30,15 +30,23 @@ func main() {
 
 function incomingRequestHandler(w http.ResponseWriter, r *http.Request){
 
+    origin_ip, err := get_origin_ip()
+    if err != nil {
+        w.WriteHeader(http.StatusPreconditionFailed)
+        fmt.Println(err)
+        io.WriteString(w, "Unable to check origin IP")
+        return
+    }
+
     if apply_fail_limit(origin_ip) {
-        fmt.Println("Fail limit applied to IP: " . origin_ip)
+        fmt.Println("Fail limit applied to IP: %s", origin_ip)
         w.WriteHeader(http.StatusTooManyRequests)
 		io.WriteString(w, "Too many failed requests in less than a minute")
         return
     }
 
     if apply_rate_limit(origin_ip) {
-        fmt.Println("Rate limit applied to IP: " . origin_ip)
+        fmt.Println("Rate limit applied to IP: %s", origin_ip)
         w.WriteHeader(http.StatusTooManyRequests)
 		io.WriteString(w, "Too many requests in less than a minute")
         return
@@ -155,6 +163,42 @@ func register_request_fail(origin_ip string){
         }
     })
 
+}
+
+func get_origin_ip() (string, error) {
+
+    forwarderForHeader := r.Header.Get("X-Forwarded-For")
+    if forwarderForHeader == '' {
+        return error.New("X-Forwarded-For value is empty")
+    }
+
+    // Find the index of the first comma
+	index := strings.Index(forwarderForHeader, ",")
+
+	// Extract the substring until the first comma
+	var origin_ip string
+	if index != -1 {
+		origin_ip = forwarderForHeader[:index]
+	} else {
+		origin_ip = forwarderForHeader // If there is no comma, take the whole string
+	}
+
+    if !is_valid_ip_address(origin_ip) {
+        return errors.New("Detected IP is not valid: %s", origin_ip)
+    }
+    
+    return origin_ip, nil
+}
+
+func is_valid_ip_address(ip string) bool {
+    // Regular expression to match IPv4 addresses
+    pattern := `^(\d{1,3}\.){3}\d{1,3}$`
+
+    // Compile the regular expression
+    regex := regexp.MustCompile(pattern)
+
+    // Check if the IP address matches the pattern
+    return regex.MatchString(ip)
 }
 
 var (
