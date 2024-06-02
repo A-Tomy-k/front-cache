@@ -88,7 +88,7 @@ function incomingRequestHandler(w http.ResponseWriter, r *http.Request){
     }
 
     // Request Ok, send to broker to process
-    // TODO
+    publish_message(message)
 }
 
 func get_platform(api_key string) (string, error){
@@ -199,6 +199,53 @@ func is_valid_ip_address(ip string) bool {
 
     // Check if the IP address matches the pattern
     return regex.MatchString(ip)
+}
+
+func publish_message(message []byte){
+
+    // RabbitMQ server connection information
+	conn, err := amqp.Dial("amqp://%s:%s@%s:%d/", rabbit_user, rabbit_pwd, rabbit_host, rabbit_port)
+	if err != nil {
+		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a channel
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Failed to open a channel: %v", err)
+	}
+	defer ch.Close()
+
+	// Declare a queue
+	q, err := ch.QueueDeclare(
+		rabbit_queue, // Queue name
+		true,   // Durable
+		false,   // Delete when unused
+		false,   // Exclusive
+		false,   // No-wait
+		nil,     // Arguments
+	)
+	if err != nil {
+		log.Fatalf("Failed to declare a queue: %v", err)
+	}
+
+	// Publish the message to the queue
+	err = ch.Publish(
+		rabbit_exchange,// Exchange
+		q.Name, // Routing key
+		false,  // Mandatory
+		false,  // Immediate
+		amqp.Publishing{
+			ContentType: "text/plain",
+			Body:        message,
+		})
+	if err != nil {
+		log.Fatalf("Failed to publish a message: %v", err)
+	}
+
+	fmt.Println("Message sent successfully!")
+
 }
 
 var (
