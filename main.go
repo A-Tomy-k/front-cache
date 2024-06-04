@@ -86,7 +86,7 @@ func incomingRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id_platform, err := get_platform(api_key)
-	if err == ApiKeyNotFound {
+	if err == ErrApiKeyNotFound {
 		register_request_fail(origin_ip)
 		err = errors.New("ApiKey not found")
 		fmt.Println(err.Error())
@@ -123,7 +123,7 @@ func get_platform(api_key string) (string, error) {
 	   if err := row.Scan(id_platform); err != nil {
 	       if err == sql.ErrNoRows {
 	           fmt.Println("Get plaform by Api Key [%d]: no platform found", api_key)
-	           return "", ApiKeyNotFound
+	           return "", ErrApiKeyNotFound
 	       }
 	       return "", fmt.Errorf("Get platform by Api Key [%d] from DB : %v", api_key, err)
 	   }
@@ -204,7 +204,7 @@ func get_origin_ip(r *http.Request) (string, error) {
 	}
 
 	if !is_valid_ip_address(origin_ip) {
-		return "", fmt.Errorf("Detected IP is not valid: %s", origin_ip)
+		return "", fmt.Errorf("detected IP is not valid: %s", origin_ip)
 	}
 
 	return origin_ip, nil
@@ -277,5 +277,5 @@ func publish_message(message []byte) {
 }
 
 var (
-	ApiKeyNotFound = errors.New("not found")
+	ErrApiKeyNotFound = errors.New("not found")
 )
